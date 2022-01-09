@@ -1,0 +1,442 @@
+---
+title: "MATH123 Final Project"
+author: "Edbert Jao, Robert Kaplan"
+date: "12/23/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# The following packages must be installed. Use install.packages("PACKAGE_NAME") if this computer does not have a package installed.
+library(tidyverse);
+library(ridge);
+library(glmnet);
+library(corrplot);
+library(ROSE);
+library(pls);
+library(xtable);
+library(stargazer);
+
+```{r}
+#---------------------- Packages ----------------------------------------------
+
+library(tidyverse);
+library(ridge);
+library(glmnet);
+library(corrplot);
+library(ROSE);
+library(pls);
+library(knitr);
+```
+
+### Set Directory to where you have stored the data csv.
+
+```{r}
+#---------------------------- Data input --------------------------------------
+setwd("C:\\Users\\edber\\OneDrive\\Desktop\\Road to PHD\\Fall 2021 @ Tufts\\Mathematical Aspects of Data Analysis\\Project\\loans");
+
+df = read.csv("accepted_2007_to_2018Q4.csv");
+df$payment_status = ifelse(df$loan_status == "Charged Off" | df$loan_status == "Default", 1, 0);
+
+select_trial = c("payment_status", "loan_amnt", "int_rate", "installment", "annual_inc", "dti", 
+           "delinq_2yrs", "fico_range_low", "fico_range_high", "open_acc", "pub_rec", 
+           "revol_bal", "revol_util", "total_acc", "out_prncp", "total_pymnt", 
+           "total_rec_prncp", "total_rec_int", "total_rec_late_fee", 
+           "last_fico_range_low", "last_fico_range_high", "tot_coll_amt", "tot_cur_bal", 
+           "open_acc_6m", "open_act_il", "open_il_12m", "open_il_24m", "mths_since_rcnt_il", 
+           "total_bal_il", "avg_cur_bal", "tot_hi_cred_lim", "inq_last_12m", 
+           "acc_open_past_24mths", "pct_tl_nvr_dlq");
+
+loans_trial = df[select_trial];
+rownames(loans_trial) = NULL;
+loans_trial = na.omit(loans_trial);
+```
+
+```{r}
+#------------------------ Variable selection ----------------------------------
+
+OLStrial <- lm(payment_status ~ ., loans_trial);
+OLStrial %>% summary(); # now remove all non-significant variables: we remove ONLY tot_coll_amt and open_act_il
+
+select = c("payment_status", "loan_amnt", "int_rate", "installment", "annual_inc", "dti", 
+  "delinq_2yrs", "fico_range_low", "fico_range_high", "open_acc", "pub_rec", 
+  "revol_bal", "revol_util", "total_acc", "out_prncp", "total_pymnt", 
+  "total_rec_prncp", "total_rec_int", "total_rec_late_fee", 
+  "last_fico_range_low", "last_fico_range_high", "tot_cur_bal", 
+  "open_acc_6m", "open_il_12m", "open_il_24m", "mths_since_rcnt_il", 
+  "total_bal_il", "avg_cur_bal", "tot_hi_cred_lim", "inq_last_12m", 
+  "acc_open_past_24mths", "pct_tl_nvr_dlq");
+loans_unbalanced = df[select];
+loans_unbalanced = na.omit(loans_unbalanced);
+
+# Randomly delete non-defaulters to balance the classes:
+loans_balanced <- ovun.sample(payment_status ~ ., data = loans_unbalanced, method = "under", N = 232418, seed = 115)$data
+loans = loans_balanced;
+```
+
+```{r}
+#------------------------- More data cleaning --------------------------------
+
+# Standardize the data
+loans[,-1] <- loans_balanced[,-1] %>% scale(center = TRUE, scale = TRUE);
+loans <- as.data.frame((loans));
+loans_sq <- loans;
+# To generate squared terms without interactions:
+for (i in seq_along(loans)) {
+loans_sq[[i]] <- I(loans_sq[[i]]^2)
+}
+loans_sq$payment_statussq1 <- NULL;
+loans_all <- cbind(loans, loans_sq); 
+names(loans_all) <- make.unique(names(loans_all), sep = "sq");
+
+```
+
+```{r}
+#------------------ Testing order of prediction model -------------------------
+
+# Drawing a randomly generated sample
+list = sample(1:232418, 12000, replace = FALSE);
+training2 = loans_all[list[1:10000],]; # training data for use w/ linear and squared terms
+testing2 = loans_all[list[10001:12000],]; # testing data for use w/ linear and squared terms
+```
+
+```{r}
+#------------------ OLS with and without interaction terms --------------------
+OLS_interactions = lm(payment_status ~ (loan_amnt+int_rate+installment+annual_inc+dti+delinq_2yrs+fico_range_low+fico_range_high
+                                        +open_acc+pub_rec+revol_bal+revol_util+total_acc+out_prncp+total_pymnt+total_rec_prncp
+                                        +total_rec_int+total_rec_late_fee+last_fico_range_low+last_fico_range_high+tot_cur_bal
+                                        +open_acc_6m+open_il_12m+open_il_24m+mths_since_rcnt_il+total_bal_il+avg_cur_bal
+                                        +tot_hi_cred_lim+inq_last_12m+acc_open_past_24mths+pct_tl_nvr_dlq)^2
+                      + (loan_amntsq1+int_ratesq1+installmentsq1+annual_incsq1+dtisq1+delinq_2yrssq1+fico_range_lowsq1+fico_range_highsq1
+                         +open_accsq1+pub_recsq1+revol_balsq1+revol_utilsq1+total_accsq1+out_prncpsq1+total_pymntsq1+total_rec_prncpsq1
+                         +total_rec_intsq1+total_rec_late_feesq1+last_fico_range_lowsq1+last_fico_range_highsq1+tot_cur_balsq1
+                         +open_acc_6msq1+open_il_12msq1+open_il_24msq1+mths_since_rcnt_ilsq1+total_bal_ilsq1+avg_cur_balsq1
+                         +tot_hi_cred_limsq1+inq_last_12msq1+acc_open_past_24mthssq1+pct_tl_nvr_dlqsq1), training2); # OLS with interaction terms
+OLSpredicted_interactions <- predict(OLS_interactions, testing2);  # predict on test data
+OLS_MSPE_interactions <- (1/length(testing2))*sum((testing2$payment_status - OLSpredicted_interactions)^2); # OLS w/ interactions: out-of-sample MSPE
+
+OLSpredicted_inter_ins <-  predict(OLS_interactions, training2); # predict on training data
+OLS_MSPE_inter_ins <- (1/length(training2))*sum((training2$payment_status - OLSpredicted_inter_ins)^2); # OLS w/ interactions: in-sample MSPE
+
+
+
+OLS = lm(payment_status ~ ., training2); # OLS without interaction terms
+OLSpredicted <- predict(OLS, testing2); # predict on test data
+OLS_MSPE <- (1/length(testing2))*sum((testing2$payment_status - OLSpredicted)^2); # OLS: out-of-sample MSPE
+
+OLSpredicted_ins <- predict(OLS, training2); # predict on training data
+OLS_MSPE_ins <- (1/length(testing2))*sum((testing2$payment_status - OLSpredicted_ins)^2); # OLS: in-sample MSPE
+
+```
+
+```{r}
+#------------------ RIDGE with and without interaction terms ------------------
+
+Ridge_interactions = linearRidge(payment_status ~ (loan_amnt+int_rate+installment+annual_inc+dti+delinq_2yrs+fico_range_low+fico_range_high
+                                                   +open_acc+pub_rec+revol_bal+revol_util+total_acc+out_prncp+total_pymnt+total_rec_prncp
+                                                   +total_rec_int+total_rec_late_fee+last_fico_range_low+last_fico_range_high+tot_cur_bal
+                                                   +open_acc_6m+open_il_12m+open_il_24m+mths_since_rcnt_il+total_bal_il+avg_cur_bal
+                                                   +tot_hi_cred_lim+inq_last_12m+acc_open_past_24mths+pct_tl_nvr_dlq)^2
+                                 + (loan_amntsq1+int_ratesq1+installmentsq1+annual_incsq1+dtisq1+delinq_2yrssq1+fico_range_lowsq1+fico_range_highsq1
+                                    +open_accsq1+pub_recsq1+revol_balsq1+revol_utilsq1+total_accsq1+out_prncpsq1+total_pymntsq1+total_rec_prncpsq1
+                                    +total_rec_intsq1+total_rec_late_feesq1+last_fico_range_lowsq1+last_fico_range_highsq1+tot_cur_balsq1
+                                    +open_acc_6msq1+open_il_12msq1+open_il_24msq1+mths_since_rcnt_ilsq1+total_bal_ilsq1+avg_cur_balsq1
+                                    +tot_hi_cred_limsq1+inq_last_12msq1+acc_open_past_24mthssq1+pct_tl_nvr_dlqsq1), training2, 
+                                 lambda = cv.glmnet(y=training2$payment_status%>%as.matrix(),x=training2[,-1]%>%as.matrix(), 
+                                                    nfolds=10)$lambda.min); # Ridge with interactions
+RIDGEpredicted_interactions <- predict(Ridge_interactions, testing2);  # predict on test data
+RIDGE_MSPE_interactions <- (1/nrow(testing2))*sum((testing2$payment_status - RIDGEpredicted_interactions)^2); # Ridge w/ interactions: out-of-sample MSPE
+
+RIDGEpredicted_interactions_ins <- predict(Ridge_interactions, training2); # predict on training data
+RIDGE_MSPE_interactions_ins <- (1/nrow(training2))*sum((training2$payment_status - RIDGEpredicted_interactions_ins)^2); # Ridge w/ interactions: in-sample MSPE
+
+Ridge = linearRidge(payment_status ~., training2, 
+                    lambda = cv.glmnet(y=training2$payment_status%>%as.matrix(),x=training2[,-1]%>%as.matrix(), 
+                                       nfolds=10)$lambda.min); # Ridge w/o interactions
+
+RIDGEpredicted <- predict(Ridge, testing2); # predict on test data
+RIDGE_MSPE <- (1/nrow(testing2))*sum((testing2$payment_status - RIDGEpredicted)^2); # Ridge: out-of-sample MSPE
+
+RIDGEpredicted_ins <- predict(Ridge, training2); # predict on training data
+RIDGE_MSPE_ins <- (1/nrow(training2))*sum((training2$payment_status - RIDGEpredicted_ins)^2); # Ridge: in-sample MSPE
+```
+
+```{r}
+#------------------------- Checking collinearity ------------------------------
+
+## Is ridge appropriate? Check correlation matrix:
+corr <- cor(loans);
+corrplot::corrplot(corr, method = "color", type = "upper", order = "original", 
+         tl.col = "black", tl.pos = 'n');
+```
+
+```{r}
+#--------------- Principal Components Regression ------------------------------
+
+to_PCA <- training2;
+to_PCA$payment_status <- NULL;
+loans_PCA <- prcomp(to_PCA, center = FALSE, scale = FALSE) # As the data are already standardized.
+
+# Check that projections on to PCs == projections from inbuilt
+as.matrix(to_PCA) %*% as.matrix(loans_PCA$rotation) [,1:10] %>% head(1);
+loans_PCA$x [,1:10] %>% head(1);
+
+# Make dataframe to run OLS using projections:
+training_projections <- as.data.frame((loans_PCA$x));
+training_PCR <- cbind(training2$payment_status, training_projections);
+names(training_PCR)[1] <- "payment_status";
+
+testing_PCR <- testing2;
+testing_PCR$payment_status <- NULL;
+testing_projections <- as.matrix(testing_PCR) %*% as.matrix(loans_PCA$rotation) %>% as.data.frame(); 
+testing_PCR <- cbind(testing2$payment_status, testing_projections);
+names(testing_PCR)[1] <- "payment_status";
+
+# Principal components regression: no interactions
+# PCR_1 <- lm(payment_status ~ ., data = training_PCR);
+# summary(PCR_1);
+
+
+# PCR using package: no interactions
+PCR_1 <- pcr(payment_status ~ ., data = training2, center = FALSE, scale = FALSE, validation = "CV", segments = 10); # cross validate
+validationplot(PCR_1, val.type="MSEP"); 
+
+training_PCR_CV = training_PCR[,1:(PCR_1$validation$ncomp+1)];
+PCR_2 <- lm(payment_status ~ ., data = training_PCR_CV); # PCR
+
+PCRpredicted <- predict(PCR_2, testing_PCR); # predict on test data
+PCR_MSPE <- (1/nrow(testing_PCR))*sum((testing_PCR$payment_status - PCRpredicted)^2); # PCR: out-of-sample MSPE
+
+PCRpredicted_ins <- predict(PCR_2, training_PCR); # predict on training data
+PCR_MSPE_ins <- (1/nrow(training_PCR))*sum((training_PCR$payment_status - PCRpredicted_ins)^2); # PCR: in-sample MSPE
+```
+
+```{r}
+#---------------------- Lasso Regression --------------------------------------
+# without interactions:
+experiment_set = OLS$model; 
+LASSO1 = glmnet(x = experiment_set[,-1] %>% as.matrix(), 
+                y = experiment_set[,1] %>% as.matrix(), 
+                alpha = 1, 
+                lambda = cv.glmnet(x=experiment_set[,-1]%>%as.matrix(),y=experiment_set[,1]%>%as.matrix(), nfolds=10)$lambda.min,
+                standardize = FALSE); # Lasso without ineractions
+
+LASSO1predicted <- predict(LASSO1, as.matrix(testing2)[,-1]); # predict on test data
+LASSO1_MSPE <- (1/nrow(testing2))*sum((testing2$payment_status - LASSO1predicted)^2); # Lasso: out-of-sample MSPE
+
+LASSO1predicted_ins <- predict(LASSO1, as.matrix(training2)[,-1]); # predict on training data
+LASSO1_MSPE_ins <- (1/nrow(training2))*sum((training2$payment_status - LASSO1predicted_ins)^2); # Lasso in-sample MSPE
+
+# with interactions
+### data preparation: lasso function cannot generate interaction terms automatically
+y = training2[,1] %>% as.matrix();
+f = as.formula(y ~ (loan_amnt+int_rate+installment+annual_inc+dti+delinq_2yrs+fico_range_low+fico_range_high
+                    +open_acc+pub_rec+revol_bal+revol_util+total_acc+out_prncp+total_pymnt+total_rec_prncp
+                    +total_rec_int+total_rec_late_fee+last_fico_range_low+last_fico_range_high+tot_cur_bal
+                    +open_acc_6m+open_il_12m+open_il_24m+mths_since_rcnt_il+total_bal_il+avg_cur_bal
+                    +tot_hi_cred_lim+inq_last_12m+acc_open_past_24mths+pct_tl_nvr_dlq)^2
+               + (loan_amntsq1+int_ratesq1+installmentsq1+annual_incsq1+dtisq1+delinq_2yrssq1+fico_range_lowsq1+fico_range_highsq1
+                  +open_accsq1+pub_recsq1+revol_balsq1+revol_utilsq1+total_accsq1+out_prncpsq1+total_pymntsq1+total_rec_prncpsq1
+                  +total_rec_intsq1+total_rec_late_feesq1+last_fico_range_lowsq1+last_fico_range_highsq1+tot_cur_balsq1
+                  +open_acc_6msq1+open_il_12msq1+open_il_24msq1+mths_since_rcnt_ilsq1+total_bal_ilsq1+avg_cur_balsq1
+                  +tot_hi_cred_limsq1+inq_last_12msq1+acc_open_past_24mthssq1+pct_tl_nvr_dlqsq1));
+x = model.matrix(f, training2)[,-1];
+x_training = cbind(training2$payment_status, x);
+
+y2 = testing2[,1] %>% as.matrix(); 
+f2 = as.formula(y2 ~ (loan_amnt+int_rate+installment+annual_inc+dti+delinq_2yrs+fico_range_low+fico_range_high
+                    +open_acc+pub_rec+revol_bal+revol_util+total_acc+out_prncp+total_pymnt+total_rec_prncp
+                    +total_rec_int+total_rec_late_fee+last_fico_range_low+last_fico_range_high+tot_cur_bal
+                    +open_acc_6m+open_il_12m+open_il_24m+mths_since_rcnt_il+total_bal_il+avg_cur_bal
+                    +tot_hi_cred_lim+inq_last_12m+acc_open_past_24mths+pct_tl_nvr_dlq)^2
+               + (loan_amntsq1+int_ratesq1+installmentsq1+annual_incsq1+dtisq1+delinq_2yrssq1+fico_range_lowsq1+fico_range_highsq1
+                  +open_accsq1+pub_recsq1+revol_balsq1+revol_utilsq1+total_accsq1+out_prncpsq1+total_pymntsq1+total_rec_prncpsq1
+                  +total_rec_intsq1+total_rec_late_feesq1+last_fico_range_lowsq1+last_fico_range_highsq1+tot_cur_balsq1
+                  +open_acc_6msq1+open_il_12msq1+open_il_24msq1+mths_since_rcnt_ilsq1+total_bal_ilsq1+avg_cur_balsq1
+                  +tot_hi_cred_limsq1+inq_last_12msq1+acc_open_past_24mthssq1+pct_tl_nvr_dlqsq1));
+x2 = model.matrix(f2, testing2)[,-1];
+x_testing = cbind(testing2$payment_status, x2);
+
+LASSO1_interactions = glmnet(x, y, alpha=1, lambda=cv.glmnet(x, y, nfolds=10)$lambda.min, standardize=FALSE); # Lasso with interactions
+
+
+LASSO1predicted_interactions <- predict(LASSO1_interactions, as.matrix(x_testing)[,-1]); # predict on test data
+LASSO1_MSPE_interactions <- (1/nrow(testing2))*sum((testing2$payment_status - LASSO1predicted_interactions)^2); # Lasso: out-of-sample MSPE
+
+
+LASSO1predicted_inter_ins <- predict(LASSO1_interactions, as.matrix(x_training)[,-1]); # predict on training data
+LASSO1_MSPE_inter_ins <- (1/nrow(training2))*sum((training2$payment_status - LASSO1predicted_inter_ins)^2); # Lasso: in-sample MSPE
+```
+
+```{r}
+#---------------------- Classification / probability -----------------------------------------
+summary(OLSpredicted);
+hist(OLSpredicted); abline(v = c(0, 1));
+summary(RIDGEpredicted);
+hist(RIDGEpredicted); abline(v = c(0, 1));
+summary(LASSO1predicted);
+hist(LASSO1predicted); abline(v = c(0, 1));
+summary(PCRpredicted);
+hist(PCRpredicted); abline(v = c(0, 1));
+# Note that the standardized data have basically been moved to two new modes. Bounds are slightly larger.
+```
+
+```{r}
+#---------------------- Visualization -----------------------------------------
+
+## Ridge Trace
+ridge.fit = glmnet(x=experiment_set[,-1] %>% as.matrix(), y=experiment_set[,1]%>%as.matrix(),alpha=0);
+plot(ridge.fit, xvar="lambda", main="Ridge Trace");
+
+## Lasso Trace
+lasso.fit = glmnet(x=experiment_set[,-1] %>% as.matrix(), y=experiment_set[,1]%>%as.matrix(),alpha=1);
+plot(lasso.fit, xvar="lambda", main="Lasso Trace");
+
+## MSPE Curve
+RidgeMSPE_curve = function(training, testing) {
+  lambdas = glmnet(x=experiment_set[,-1] %>% as.matrix(), y=experiment_set[,1]%>%as.matrix(),alpha=0)$lambda;
+  MSPE_list = rep(NA, length(lambdas));
+  for(i in 1:length(lambdas)) {
+    MSPE_list[i] = (1/nrow(testing))*sum((testing$payment_status - 
+                                            predict(linearRidge(payment_status ~., training, lambda = lambdas[i]), testing))^2);
+  }
+  plot(MSPE_list, pch=19, col="red", xlab="Lambda", ylab="MSPE", main="Ridge MSPE varies based on Lambda");
+};
+
+RidgeMSPE_curve(training2, testing2);
+
+LassoMSPE_curve = function(training, testing) {
+  lambdas = glmnet(x=experiment_set[,-1] %>% as.matrix(), y=experiment_set[,1]%>%as.matrix(),alpha=1)$lambda;
+  MSPE_list = rep(NA, length(lambdas));
+  
+  for(i in 1:length(lambdas)) {
+    MSPE_list[i] = (1/nrow(testing))*sum((testing$payment_status - 
+                                            predict(linearRidge(payment_status ~., training, lambda = lambdas[i]), testing))^2);
+  }
+  plot(MSPE_list, pch=19, col="red", xlab="Lambda", ylab="MSPE", main="Lasso MSPE varies based on Lambda");
+};
+
+LassoMSPE_curve(training2, testing2);
+```
+
+```{r}
+#---------------------- Tables and Figures ------------------------------------
+library(xtable);
+library(stargazer);
+
+## Table showing class imbalance in dependent variable
+counts_unbalanced <- table(loans_unbalanced$payment_status);
+counts_balanced <- table(loans_balanced$payment_status);
+
+table_imbalance <- rbind(counts_unbalanced, counts_balanced);
+  rownames(table_imbalance) <- c("Unbalanced", "Balanced");
+  colnames(table_imbalance) <- c("Non-defaulters", "Defaulters");
+  table_imbalance <- xtable(table_imbalance, label = "classImbalance");
+  print(table_imbalance);
+
+## Tables showing how non-defaulters differ between unbalanced and balanced samples
+##NOTE: the data are standardized now.
+var_requests = c("payment_status", "loan_amnt", "int_rate", "annual_inc", "dti", 
+                   "delinq_2yrs", "fico_range_high", "revol_util", 
+                   "total_rec_prncp");
+
+unbal_class0 <- subset(loans_unbalanced, subset = payment_status == 0, select = var_requests);
+bal_class0 <- subset(loans_balanced, subset = payment_status == 0, select = var_requests);
+
+stats_unbal_class0 <- stargazer(unbal_class0, digits = 3, summary.stat = c("mean", "sd"), 
+                              label = "unbalancedClass0stats");
+stats_bal_class0 <- stargazer(bal_class0, digits = 3, summary.stat = c("mean", "sd"), 
+                              label = "balancedClass0stats");
+
+## Table comparing key stats from balanced loans to sample we draw
+for_bal_stats = loans[var_requests];
+colnames(for_bal_stats) <- c("Payment status", "Loan amount", "Int. rate", "Annual inc.", "Debt-income ratio", 
+                                  "Delinquent w/in 2 yrs", "FICO score, u.b.", "Revolving util.", 
+                                  "Total princ. paid");
+for_sample_stats = training2[var_requests];
+colnames(for_sample_stats) <- c("Payment status", "Loan amount", "Int. rate", "Annual inc.", "Debt-income ratio", 
+                                  "Delinquent w/in 2 yrs", "FICO score, u.b.", "Revolving util.", 
+                                  "Total princ. paid");
+
+stats_balanced <- stargazer(for_bal_stats, digits = 3, summary.stat = c("mean", "sd", "min", "max"), 
+                            label = "balancedStatTable");
+stats_sample <- stargazer(for_sample_stats, digits = 3, summary.stat = c("mean", "sd", "min", "max"),
+                          label = "subsampleStatTable");
+
+# Table of all stats for subsample
+
+var_names1 <- colnames(training2)[1:8];
+var_names2 <- colnames(training2)[9:16];
+var_names3 <- colnames(training2)[17:24];
+var_names4 <- colnames(training2)[25:32];
+
+vars_table <- matrix(c(var_names1, var_names2, var_names3, var_names4), ncol = 4, nrow = 8);
+
+stats_subsample <- stargazer(training2, digits = 2, label = "subsampleStatTableAll",
+                             font.size = "tiny", column.sep.width = "0pt");
+
+
+# Regression table
+
+colnamesreg <- c("OLS", "Ridge", "Lasso", "PCR", "OLS w/ interactions", "Ridge w/ interactions", "Lasso w/ interactions", "PCR w/ interactions");
+rownamesreg <- c("$lambda$ / PCs", "In-sample MSPE", "Out-of-sample MSPE", 
+              "No. nonzero coefficients", "% of $y notin [0,1]");
+      lambdas <- rep(NA,8);
+#          lambdas[1] <- NA;
+          lambdas[2] <- cv.glmnet(y=training2$payment_status%>%as.matrix(),
+                                  x=training2[,-1]%>%as.matrix(), nfolds=10)$lambda.min;
+          lambdas[3] <- cv.glmnet(x=experiment_set[,-1]%>%as.matrix(),
+                                  y=experiment_set[,1]%>%as.matrix(), nfolds=10)$lambda.min;
+          lambdas[4] <- PCR_1$ncomp;
+#          lambdas[5] <- NA;
+          lambdas[6] <- cv.glmnet(y=training2$payment_status%>%as.matrix(),
+                                  x=training2[,-1]%>%as.matrix(), nfolds=10)$lambda.min;
+          lambdas[7] <- cv.glmnet(x, y, nfolds=10)$lambda.min;
+#          lambdas[8] <- NA;
+      ismspe <- rep(NA,8);
+          ismspe[1]   <- OLS_MSPE_ins;
+          ismspe[2]   <- RIDGE_MSPE_ins;
+          ismspe[3]   <- LASSO1_MSPE_ins;
+          ismspe[4]   <- PCR_MSPE_ins;
+          ismspe[5]   <- OLS_MSPE_inter_ins;
+          ismspe[6]   <- RIDGE_MSPE_interactions_ins;
+          ismspe[7]   <- LASSO1_MSPE_inter_ins;
+#          ismspe[8]   <- NA;
+      oosmspe <- rep(NA,8);
+          oosmspe[1] <- OLS_MSPE;
+          oosmspe[2] <- RIDGE_MSPE;
+          oosmspe[3] <- LASSO1_MSPE;
+          oosmspe[4] <- PCR_MSPE;
+          oosmspe[5] <- OLS_MSPE_interactions;
+          oosmspe[6] <- RIDGE_MSPE_interactions;
+          oosmspe[7] <- LASSO1_MSPE_interactions;
+#          oosmspe[8] <- "NA";
+      nzcoef <- rep(NA,8);
+#          nzcoef[1] <- "NA";
+          nzcoef[2] <- Ridge$coef[Ridge$coef == 0] %>% length();
+          nzcoef[3] <- (LASSO1$beta %>% length()) - LASSO1$df;
+#          nzcoef[4] <- "NA";
+#          nzcoef[5] <- "NA";
+          nzcoef[6] <- Ridge_interactions$coef[Ridge_interactions$coef == 0] %>% length();
+          nzcoef[7] <- (LASSO1_interactions$beta %>% length()) - LASSO1_interactions$df;
+#          nzcoef[8] <- "NA";
+      pcnty <- rep(NA,8);
+          pcnty[1] <- length(OLSpredicted[OLSpredicted > 1 | OLSpredicted < 0])/length(OLSpredicted);
+          pcnty[2] <- length(RIDGEpredicted[RIDGEpredicted > 1 | RIDGEpredicted < 0])/length(RIDGEpredicted);
+          pcnty[3] <- length(LASSO1predicted[LASSO1predicted > 1 | LASSO1predicted < 0])/length(LASSO1predicted);
+          pcnty[4] <- length(PCRpredicted[PCRpredicted > 1 | PCRpredicted < 0])/length(PCRpredicted);
+          pcnty[5] <- length(OLSpredicted_interactions[OLSpredicted_interactions>1|OLSpredicted_interactions<0])/length(OLSpredicted_interactions);
+          pcnty[6] <- length(RIDGEpredicted_interactions[RIDGEpredicted_interactions>1 | RIDGEpredicted_interactions<0])/length(RIDGEpredicted_interactions);
+          pcnty[7] <- length(LASSO1predicted_interactions[LASSO1predicted_interactions>1|LASSO1predicted_interactions<0])/length(LASSO1predicted_interactions);
+#          pcnty[8] <- "NA";
+
+
+reg_table <- as.data.frame(rbind(lambdas,ismspe,oosmspe,nzcoef,pcnty), col.names = colnamesreg, row.names = rownamesreg);
+colnames(reg_table) <- colnamesreg
+reg_table <- round(reg_table, digits = 5)
+stargazer(reg_table, summary = FALSE)
+kable(reg_table);
+```
+
